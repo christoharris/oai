@@ -1,94 +1,38 @@
-from langchain.document_loaders import PyPDFLoader, DirectoryLoader
-from langchain import PromptTemplate
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.llms import CTransformers
-from langchain.chains import RetrievalQA
-import chainlit as cl
+import os
+import streamlit as st
+from dotenv import load_dotenv
+from langchain.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.agents import AgentType, initialize_agent, load_tools
+from langchain.callbacks import StreamlitCallbackHandler
+from langchain.tools import DuckDuckGoSearchRun
 
-DB_FAISS_PATH = 'vectorstores/db_faiss'
+load_dotenv()
 
-custom_prompt_template = """Use the following pieces of information to answer the user's question.
-If you don't know the answer, just say that you don't know, don't try to make up an answer.
+# page configuration
+st.set_page_config(page_title='Convo-Agency', page_icon=":zap:")
+st.title('Convo-Agency')
 
-Context: {context}
-Question: {question}
+# intialize session state
+if 'messages' not in st.session_state:
+    st.session_state['messages'] = [{'role': 'assistant', 'content': 'How can I assist you?'}]
 
-Only return the helpful answer below and nothing else.
-Helpful answer:
-"""
+for message in st.session_state.messages:
+    st.chat_message(message['role']).write(message['content'])
 
-def set_custom_prompt():
-    """
-    Prompt template for QA retrieval for each vectorstore
-    """
-    prompt = PromptTemplate(template=custom_prompt_template,
-                            input_variables=['context', 'question'])
-    return prompt
+llm = OpenAI(temperature=0, streaming=True, openai_api_key=os.getenv("OPENAI_API_KEY"))
+tools = [DuckDuckGoSearchRun(name="Search")] # alternative [load_tools(["ddg-search"])]
+agent = initialize_agent(
+    tools,llm,agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION)
 
-#Retrieval QA Chain
-def retrieval_qa_chain(llm, prompt, db):
-    qa_chain = RetrievalQA.from_chain_type(llm=llm,
-                                       chain_type='stuff',
-                                       retriever=db.as_retriever(search_kwargs={'k': 2}),
-                                       return_source_documents=True,
-                                       chain_type_kwargs={'prompt': prompt}
-                                       )
-    return qa_chain
 
-#Loading the model
-def load_llm():
-    # Load the locally downloaded model here
-    llm = CTransformers(
-        model = "llama-2-7b-chat.ggmlv3.q8_0.bin",
-        model_type="llama",
-        max_new_tokens = 512,
-        temperature = 0.5
-    )
-    return llm
+if prompt := st.chat_input(placeholder='Ask a question'):
+    st.session_state.messages.append({'role': 'user', 'content': prompt})
+    st.chat_message('user').write(prompt)
+    with st.chat_message("assistant"):
+        # st.write("🧠 thinking...")
+        st_callback = StreamlitCallbackHandler(st.container())
+        response = agent.run(prompt)
+        st.session_state.messages.append({'role': 'assistant', 'content': response})
+        st.write(response)
 
-#QA Model Function
-def qa_bot():
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2",
-                                       model_kwargs={'device': 'cpu'})
-    db = FAISS.load_local(DB_FAISS_PATH, embeddings)
-    llm = load_llm()
-    qa_prompt = set_custom_prompt()
-    qa = retrieval_qa_chain(llm, qa_prompt, db)
-
-    return qa
-
-#output function
-def final_result(query):
-    qa_result = qa_bot()
-    response = qa_result({'query': query})
-    return response
-
-#chainlit code
-@cl.on_chat_start
-async def start():
-    chain = qa_bot()
-    msg = cl.Message(content="Starting the bot...")
-    await msg.send()
-    msg.content = "How can I help?"
-    await msg.update()
-
-    cl.user_session.set("chain", chain)
-
-@cl.on_message
-async def main(message):
-    chain = cl.user_session.get("chain") 
-    cb = cl.AsyncLangchainCallbackHandler(
-        stream_final_answer=True, answer_prefix_tokens=["FINAL", "ANSWER"]
-    )
-    cb.answer_reached = True
-    res = await chain.acall(message, callbacks=[cb])
-    answer = res["result"]
-    sources = res["source_documents"]
-
-    if sources:
-        answer += f"\nSources:" + str(sources)
-    else:
-        answer += "\nNo sources found"
-
-    await cl.Message(content=answer).send()
