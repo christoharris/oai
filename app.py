@@ -5,27 +5,22 @@ import streamlit as st
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 from langchain.llms import OpenAI, HuggingFaceHub, CTransformers
+from langchain.llms import GPT4All, LlamaCpp
 from langchain.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
-from langchain.agents import AgentType, initialize_agent, load_tools
 from langchain.callbacks import StreamlitCallbackHandler, get_openai_callback
-from langchain.tools import DuckDuckGoSearchRun
 from langchain.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
 from langchain.chains.question_answering import load_qa_chain
-from langchain.llms import GPT4All, LlamaCpp
+from langchain.chains import RetrievalQA
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.callbacks import StreamlitCallbackHandler
-from langchain.chains import RetrievalQA
 from langchain.document_loaders import TextLoader, PyPDFLoader
-from langchain.indexes import VectorstoreIndexCreator
-from langchain.docstore.document import Document
 
 load_dotenv()
 
 # page configuration
-st.set_page_config(page_title='Convo-Agency', page_icon=":zap:")
-st.title('Convo-Agency')
+st.set_page_config(page_title='Offline, Ai', page_icon=":zap:")
+st.title('Offline, Ai')
 
 # load environment variables
 model_type = os.environ.get('MODEL_TYPE')
@@ -45,7 +40,7 @@ if pdf_docs:
         st.session_state['button'] += 1
         with st.spinner('Processing'):
             # create the pdf text
-            time.sleep(1)
+            time.sleep(3)
             
 if 'button' not in st.session_state:
     st.session_state.button = 0
@@ -84,11 +79,9 @@ if st.session_state['button']:
         chunks = text_splitter.split_text(text)
         return chunks
 
-    # Chunks -> OPENAI(embedding) -> vectorstore
+    
     def get_vectorstore(text_chuncks):
         embeddings = HuggingFaceEmbeddings(model_name = 'all-MiniLM-L6-v2')
-        # local embeddings
-        # embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl") 
         vectorstore = FAISS.from_texts(texts=text_chuncks, embedding=embeddings)
         return vectorstore
 
@@ -99,16 +92,11 @@ if st.session_state['button']:
     text_chunks = get_text_chunks(raw_text)
     # create vector store
     vectorstore = get_vectorstore(text_chunks) 
-    # tools = [DuckDuckGoSearchRun(name="Search")] # alternative [load_tools(["ddg-search"])]
-    # agent = initialize_agent(tools,llm,agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION)
 
-    # raw_text = get_pdf_text(pdf_docs)
-    # text_chunks = get_text_chunks(raw_text)
-    # knowledge_base = get_vectorstore(text_chunks)
     llm = OpenAI(temperature=0, streaming=True, openai_api_key=os.getenv("OPENAI_API_KEY"))
-    args = parse_arguments()
-    callbacks = [] if args.mute_stream else [StreamingStdOutCallbackHandler()]
-    llm2 = GPT4All(model=model_path2, max_tokens=1000, backend='gptj', n_batch=model_n_batch, callbacks=callbacks, verbose=False)
+    # args = parse_arguments()
+    # callbacks = [] if args.mute_stream else [StreamingStdOutCallbackHandler()]
+    llm2 = GPT4All(model=model_path2, max_tokens=1000, backend='gptj', n_batch=model_n_batch, verbose=False)
     embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k":2})
     qa = RetrievalQA.from_chain_type(llm=llm2, chain_type="stuff", retriever=retriever, return_source_documents=True)    
@@ -121,7 +109,7 @@ if st.session_state['button']:
         st.chat_message(message['role']).write(message['content'])
 
 
-
+    # Conversation Dynamics
     if prompt := st.chat_input(placeholder='Ask a question'):
         st.session_state.messages.append({'role': 'user', 'content': prompt})
         st.chat_message('user').write(prompt)
@@ -133,4 +121,12 @@ if st.session_state['button']:
             response = qa(prompt)
             st.session_state.messages.append({'role': 'assistant', 'content': response})
             st.markdown(response['result'])
+
+
+
+
+
+
+
+
 
